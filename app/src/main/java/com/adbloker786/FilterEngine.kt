@@ -5,19 +5,29 @@ import java.util.Locale
 internal object FilterEngine {
     private val normal = setOf(
         "doubleclick.net", "googlesyndication.com", "googleadservices.com",
-        "adservice.google.com", "adnxs.com", "adsrvr.org"
+        "adservice.google.com", "adnxs.com", "adsrvr.org", "zedo.com",
+        "advertising.com", "adform.net", "pubmatic.com", "openx.net"
     )
     private val advanced = normal + setOf(
         "criteo.com", "taboola.com", "outbrain.com", "scorecardresearch.com",
-        "quantserve.com", "pubmatic.com", "rubiconproject.com", "openx.net",
-        "adform.net", "smartadserver.com", "casalemedia.com", "moatads.com",
-        "serving-sys.com", "amazon-adsystem.com", "ads-twitter.com", "ads.linkedin.com"
+        "quantserve.com", "rubiconproject.com", "smartadserver.com",
+        "casalemedia.com", "moatads.com", "serving-sys.com",
+        "amazon-adsystem.com", "ads-twitter.com", "ads.linkedin.com",
+        "googletagservices.com", "adroll.com", "bidswitch.net",
+        "bluekai.com", "demdex.net", "everesttech.net", "omtrdc.net",
+        "rlcdn.com", "lijit.com", "triplelift.com", "sharethrough.com",
+        "yieldmo.com", "sovrn.com", "undertone.com", "33across.com",
+        "tapad.com", "exoclick.com", "popads.net", "propellerads.com"
     )
     private val maximum = advanced + setOf(
         "unityads.unity3d.com", "applovin.com", "ironsrc.com", "inmobi.com",
-        "advertising.com", "media.net", "lijit.com", "triplelift.com",
-        "bidswitch.net", "sharethrough.com", "ads.facebook.com",
-        "pixel.facebook.com", "an.facebook.com", "tr.facebook.com", "analytics.tiktok.com"
+        "media.net", "3lift.com", "adcolony.com", "vungle.com",
+        "chartboost.com", "fyber.com", "tapjoy.com", "startapp.com",
+        "mintegral.com", "smaato.net", "ads.facebook.com", "pixel.facebook.com",
+        "an.facebook.com", "tr.facebook.com", "analytics.tiktok.com",
+        "adsafeprotected.com", "adsterra.com", "popcash.net",
+        "onclickalgo.com", "trafficjunky.net", "exosrv.com", "hilltopads.net",
+        "adcash.com", "ad-maven.com", "juicyads.com", "propeller-tracking.com"
     )
 
     fun isBlocked(host: String, mode: String, customBlockRules: String = "", allowRules: String = ""): Boolean {

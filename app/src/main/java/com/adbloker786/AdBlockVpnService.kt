@@ -36,14 +36,17 @@ class AdBlockVpnService : VpnService() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
-        val descriptor = Builder()
-            .setSession("Adbloker 786")
-            .addAddress(TUN_ADDRESS, 32)
-            .addRoute(DNS_ADDRESS, 32)
-            .addDnsServer(DNS_ADDRESS)
-            .setMtu(1500)
-            .setBlocking(true)
-            .establish()
+        val descriptor = try {
+            Builder().setSession("Adbloker 786")
+                .addAddress(TUN_ADDRESS, 32)
+                .addRoute(DNS_ADDRESS, 32)
+                .addDnsServer(DNS_ADDRESS)
+                .setMtu(1500)
+                .setBlocking(true)
+                .establish()
+        } catch (_: Exception) {
+            null
+        }
 
         if (descriptor == null) {
             preferences.edit().putBoolean(KEY_ENABLED, false).apply()
@@ -72,11 +75,8 @@ class AdBlockVpnService : VpnService() {
                 val customBlocks = preferences.getString(KEY_CUSTOM_BLOCKS, "").orEmpty()
                 val allowRules = preferences.getString(KEY_ALLOW_RULES, "").orEmpty()
                 val blocked = FilterEngine.isBlocked(request.host, mode, customBlocks, allowRules)
-                val dnsResponse = if (blocked) {
-                    DnsPacket.errorResponse(request, 3)
-                } else {
+                val dnsResponse = if (blocked) DnsPacket.errorResponse(request, 3) else
                     forwardDns(request) ?: DnsPacket.errorResponse(request, 2)
-                }
                 output.write(DnsPacket.buildIpv4UdpResponse(request, dnsResponse))
                 recordQuery(blocked)
             } catch (_: Exception) {
@@ -124,18 +124,12 @@ class AdBlockVpnService : VpnService() {
 
     private fun buildNotification(): Notification {
         val stopIntent = Intent(this, AdBlockVpnService::class.java).setAction(ACTION_STOP)
-        val stopPendingIntent = PendingIntent.getService(
-            this, 1, stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
+        val stopPendingIntent = PendingIntent.getService(this, 1, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL_ID) else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-        return builder
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+        return builder.setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentTitle("Adbloker 786 is active")
             .setContentText("DNS ad and tracker filtering is running")
             .setOngoing(true)
@@ -145,20 +139,25 @@ class AdBlockVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        stopSelf()
+        closeTunnel()
         super.onRevoke()
+        stopSelf()
     }
 
     override fun onDestroy() {
-        running = false
-        preferences.edit().putBoolean(KEY_ENABLED, false).apply()
-        try { tunnel?.close() } catch (_: Exception) { }
-        tunnel = null
+        closeTunnel()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE) else {
             @Suppress("DEPRECATION")
             stopForeground(true)
         }
         super.onDestroy()
+    }
+
+    private fun closeTunnel() {
+        running = false
+        preferences.edit().putBoolean(KEY_ENABLED, false).apply()
+        try { tunnel?.close() } catch (_: Exception) { }
+        tunnel = null
     }
 
     companion object {
