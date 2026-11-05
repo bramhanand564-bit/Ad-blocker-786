@@ -1,8 +1,14 @@
 package com.adbloker786
 
-import android.net.VpnService
-import android.os.ParcelFileDescriptor
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.net.VpnService
+import android.os.Build
+import android.os.ParcelFileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -10,13 +16,164 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import kotlin.concurrent.thread
 
-class AdBlockVpnService:VpnService(){ private var tun:ParcelFileDescriptor?=null; @Volatile private var running=false
- override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int { if(running)return START_STICKY; val b=Builder().setSession("Adbloker 786").addAddress("10.77.0.1",32).addAddress("fd77:786::1",128).addRoute("0.0.0.0",0).addRoute("::",0).addDnsServer("10.77.0.1").setMtu(1500); tun=b.establish(); if(tun==null){stopSelf();return START_NOT_STICKY}; running=true; thread(name="dns-vpn"){ pump() }; return START_STICKY }
- private fun pump(){ val fd=tun?:return; val input=FileInputStream(fd.fileDescriptor); val output=FileOutputStream(fd.fileDescriptor); val buf=ByteArray(32767); while(running){ try { val n=input.read(buf); if(n<=0)continue; val p=IpDns.parse(buf,n)?:continue; val name=p.second; val blocked=name.endsWith(".doubleclick.net")||name.endsWith(".googlesyndication.com")||name.endsWith(".googleadservices.com")||name.endsWith(".adnxs.com")||name.endsWith(".facebook.net")||name.endsWith(".adsrvr.org"); val response=if(blocked) IpDns.nxdomain(p.first) else forward(p.first); if(response!=null)output.write(response) }catch(_:Exception){ if(!running)break } } }
- private fun forward(packet:ByteArray):ByteArray? { val q=IpDns.parse(packet,packet.size)?.first?:return null; return try { DatagramSocket().use{s->s.soTimeout=2500; val target=InetAddress.getByName("1.1.1.1"); val out=DatagramPacket(q,q.size,target,53); s.send(out); val data=ByteArray(4096); val res=DatagramPacket(data,data.size); s.receive(res); IpDns.wrap(packet,data.copyOf(res.length)) } }catch(_:Exception){null} }
- override fun onDestroy(){running=false;tun?.close();tun=null;super.onDestroy()}
-}
-private object IpDns { fun parse(b:ByteArray,n:Int):Pair<ByteArray,String>? { if(n<28)return null; val v=(b[0].toInt() ushr 4) and 15; val off=if(v==4){val ihl=(b[0].toInt() and 15)*4;if(n<ihl+8||b[9].toInt()!=17)return null;ihl+8}else if(v==6){if(n<48||b[6].toInt()!=17)return null;48}else return null; val port=((b[off+2].toInt() and 255) shl 8) or (b[off+3].toInt() and 255); if(port!=53)return null; val start=off+8; val dns=b.copyOfRange(start,n); if(dns.size<17)return null; var i=12; val labels=mutableListOf<String>(); while(i<dns.size){val l=dns[i++].toInt() and 255;if(l==0)break;if(l>63||i+l>dns.size)return null;labels+=String(dns,i,l,Charsets.US_ASCII);i+=l};return dns to labels.joinToString(".").lowercase() }
- fun nxdomain(q:ByteArray):ByteArray { val r=q.copyOf();r[2]=0x81.toByte();r[3]=0x83.toByte();r[6]=0;r[7]=0;r[8]=0;r[9]=0;return r }
- fun wrap(original:ByteArray,dns:ByteArray):ByteArray? { val v=(original[0].toInt() ushr 4) and 15; val off=if(v==4)28 else 48; val total=off+dns.size; val r=ByteArray(total); System.arraycopy(original,0,r,0,off); if(v==4){ for(i in 0..3){r[12+i]=original[16+i];r[16+i]=original[12+i]};r[2]=(total shr 8).toByte();r[3]=total.toByte();r[10]=0;r[11]=0; var sum=0;for(i in 0 until 20 step 2){sum+=((r[i].toInt() and 255) shl 8)+(r[i+1].toInt() and 255)};while(sum shr 16!=0)sum=(sum and 65535)+(sum shr 16);val c=sum.inv();r[10]=(c shr 8).toByte();r[11]=c.toByte() } else { for(i in 0..15){r[8+i]=original[24+i];r[24+i]=original[8+i]};r[4]=(8+dns.size shr 8).toByte();r[5]=(8+dns.size).toByte() };r[off-8]=original[off-6];r[off-7]=original[off-5];r[off-6]=original[off-8];r[off-5]=original[off-7];r[off-4]=0;r[off-3]=0;r[off-2]=0;r[off-1]=0;System.arraycopy(dns,0,r,off,dns.size);return r }
+class AdBlockVpnService : VpnService() {
+    private var tunnel: ParcelFileDescriptor? = null
+    @Volatile private var running = false
+    private val preferences by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (running) return START_STICKY
+
+        createNotificationChannel()
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+
+        val descriptor = Builder()
+            .setSession("Adbloker 786")
+            .addAddress(TUN_ADDRESS, 32)
+            .addRoute(DNS_ADDRESS, 32)
+            .addDnsServer(DNS_ADDRESS)
+            .setMtu(1500)
+            .setBlocking(true)
+            .establish()
+
+        if (descriptor == null) {
+            preferences.edit().putBoolean(KEY_ENABLED, false).apply()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        tunnel = descriptor
+        running = true
+        preferences.edit().putBoolean(KEY_ENABLED, true).apply()
+        thread(name = "adbloker-dns-tun", priority = Thread.NORM_PRIORITY) { pump(descriptor) }
+        return START_STICKY
+    }
+
+    private fun pump(descriptor: ParcelFileDescriptor) {
+        val input = FileInputStream(descriptor.fileDescriptor)
+        val output = FileOutputStream(descriptor.fileDescriptor)
+        val buffer = ByteArray(32767)
+        while (running) {
+            try {
+                val count = input.read(buffer)
+                if (count <= 0) continue
+                val request = DnsPacket.parse(buffer, count) ?: continue
+                val mode = preferences.getString(KEY_MODE, "advanced") ?: "advanced"
+                val customBlocks = preferences.getString(KEY_CUSTOM_BLOCKS, "").orEmpty()
+                val allowRules = preferences.getString(KEY_ALLOW_RULES, "").orEmpty()
+                val blocked = FilterEngine.isBlocked(request.host, mode, customBlocks, allowRules)
+                val dnsResponse = if (blocked) {
+                    DnsPacket.errorResponse(request, 3)
+                } else {
+                    forwardDns(request) ?: DnsPacket.errorResponse(request, 2)
+                }
+                output.write(DnsPacket.buildIpv4UdpResponse(request, dnsResponse))
+                recordQuery(blocked)
+            } catch (_: Exception) {
+                if (!running) break
+            }
+        }
+    }
+
+    private fun forwardDns(request: DnsPacket.Request): ByteArray? {
+        return try {
+            DatagramSocket().use { socket ->
+                if (!protect(socket)) return null
+                socket.soTimeout = 3500
+                val upstream = InetAddress.getByName(UPSTREAM_DNS)
+                socket.send(DatagramPacket(request.dnsMessage, request.dnsMessage.size, upstream, 53))
+                val responseBuffer = ByteArray(4096)
+                val response = DatagramPacket(responseBuffer, responseBuffer.size)
+                socket.receive(response)
+                if (response.length < 12 || response.port != 53) return null
+                val dns = response.data.copyOf(response.length)
+                val sameId = dns[0] == request.dnsMessage[0] && dns[1] == request.dnsMessage[1]
+                val isResponse = (dns[2].toInt() and 0x80) != 0
+                if (!sameId || !isResponse || dns.size > 1400) null else dns
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun recordQuery(blocked: Boolean) {
+        val editor = preferences.edit()
+        editor.putLong(KEY_QUERY_COUNT, preferences.getLong(KEY_QUERY_COUNT, 0L) + 1L)
+        if (blocked) editor.putLong(KEY_BLOCKED_COUNT, preferences.getLong(KEY_BLOCKED_COUNT, 0L) + 1L)
+        editor.apply()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(CHANNEL_ID, "Adbloker protection", NotificationManager.IMPORTANCE_LOW)
+            channel.description = "Shows when DNS ad and tracker filtering is active"
+            channel.setShowBadge(false)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildNotification(): Notification {
+        val stopIntent = Intent(this, AdBlockVpnService::class.java).setAction(ACTION_STOP)
+        val stopPendingIntent = PendingIntent.getService(
+            this, 1, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        return builder
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentTitle("Adbloker 786 is active")
+            .setContentText("DNS ad and tracker filtering is running")
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .addAction(Notification.Action.Builder(null, "Turn off", stopPendingIntent).build())
+            .build()
+    }
+
+    override fun onRevoke() {
+        stopSelf()
+        super.onRevoke()
+    }
+
+    override fun onDestroy() {
+        running = false
+        preferences.edit().putBoolean(KEY_ENABLED, false).apply()
+        try { tunnel?.close() } catch (_: Exception) { }
+        tunnel = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE) else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        super.onDestroy()
+    }
+
+    companion object {
+        const val ACTION_STOP = "com.adbloker786.action.STOP"
+        private const val PREFS = "adbloker786"
+        private const val KEY_ENABLED = "enabled"
+        private const val KEY_MODE = "mode"
+        private const val KEY_CUSTOM_BLOCKS = "custom_blocks"
+        private const val KEY_ALLOW_RULES = "allow_rules"
+        private const val KEY_QUERY_COUNT = "query_count"
+        private const val KEY_BLOCKED_COUNT = "blocked_count"
+        private const val TUN_ADDRESS = "10.77.0.1"
+        private const val DNS_ADDRESS = "10.77.0.2"
+        private const val UPSTREAM_DNS = "1.1.1.1"
+        private const val CHANNEL_ID = "adbloker_protection"
+        private const val NOTIFICATION_ID = 786
+    }
 }
