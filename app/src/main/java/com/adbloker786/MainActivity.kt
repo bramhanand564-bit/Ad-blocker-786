@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun getPrivateDnsWarning(): String {
+    private fun readPrivateDnsWarning(): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return ""
         return try {
             val mode = Settings.Global.getString(contentResolver, "private_dns_mode").orEmpty()
