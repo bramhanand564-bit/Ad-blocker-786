@@ -97,7 +97,7 @@ class MainActivity : ComponentActivity() {
         protectionActive = isThisAppVpnConnected()
         queryCount = prefs.getLong("query_count", 0L)
         blockedCount = prefs.getLong("blocked_count", 0L)
-        privateDnsWarning = getPrivateDnsWarning()
+        privateDnsWarning = readPrivateDnsWarning()
         if (protectionActive) {
             protectionStarting = false
             connectionIssue = false
