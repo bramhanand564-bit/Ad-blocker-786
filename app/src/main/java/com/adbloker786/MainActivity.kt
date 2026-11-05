@@ -123,9 +123,9 @@ class MainActivity : ComponentActivity() {
     private fun getPrivateDnsWarning(): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return ""
         return try {
-            val mode = Settings.Global.getString(contentResolver, Settings.Global.PRIVATE_DNS_MODE).orEmpty()
+            val mode = Settings.Global.getString(contentResolver, "private_dns_mode").orEmpty()
             if (mode == "hostname") {
-                val host = Settings.Global.getString(contentResolver, Settings.Global.PRIVATE_DNS_SPECIFIER).orEmpty()
+                val host = Settings.Global.getString(contentResolver, "private_dns_specifier").orEmpty()
                 "Strict Private DNS is configured (host: " + host + "). It may interfere with this VPN's DNS filter. For testing, set Android Private DNS to Automatic, then reconnect Adbloker 786."
             } else ""
         } catch (_: Exception) {
